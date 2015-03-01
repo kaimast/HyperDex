@@ -696,6 +696,7 @@ datalayer :: intersect_iterator :: valid()
                 break;
             }
 
+            // WHY?
             assert(cmp == 0);
         }
 

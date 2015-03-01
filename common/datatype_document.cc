@@ -32,7 +32,6 @@
 #include <treadstone.h>
 
 // HyperDex
-#include "common/documents.h"
 #include "common/datatype_document.h"
 #include "common/datatype_int64.h"
 #include "common/datatype_float.h"
@@ -255,7 +254,6 @@ datatype_document :: apply(const e::slice& old_value,
                     return false;
                 }
 
-
                 if (type == HYPERDATATYPE_INT64 &&
                     func.arg1_datatype == HYPERDATATYPE_FLOAT)
                 {
@@ -373,8 +371,7 @@ datatype_document :: document_check(const attribute_check& check,
                                     const e::slice& doc) const
 {
     // We expected the follwing format:
-    // <path>\0\n<value>
-
+    // <path>\0<value>
     const char* path = reinterpret_cast<const char*>(check.value.data());
     size_t path_sz = strnlen(path, check.value.size());
 
@@ -383,21 +380,30 @@ datatype_document :: document_check(const attribute_check& check,
         return false;
     }
 
-    hyperdatatype type;
-    std::vector<char> scratch;
-    e::slice value;
-
-    if (!extract_value(path, doc, &type, &scratch, &value))
+    std::vector<char> bscratch;
+    e::slice binary;
+    if (!extract_binary_value(path, doc, &bscratch, &binary))
     {
         return false;
     }
 
+    e::slice value;
+    hyperdatatype type;
+    std::vector<char> vscratch;
+    coerce_binary_to_primitive(binary, &type, &vscratch, &value);
+
     if(type == HYPERDATATYPE_DOCUMENT)
     {
+        if(check.predicate != HYPERPREDICATE_EQUALS || check.datatype != HYPERDATATYPE_DOCUMENT)
+        {
+            // not supported
+            return false;
+        }
+
         // Compare two subdocuments
         e::slice chk_value = check.value;
         chk_value.advance(path_sz + 1);
-        return (value == chk_value);
+        return (binary == chk_value);
     }
     else
     {
@@ -413,10 +419,9 @@ datatype_document :: document_check(const attribute_check& check,
 }
 
 bool
-datatype_document :: extract_value(const char* path,
+datatype_document :: extract_binary_value(const char* path,
                                    const e::slice& data,
-                                   hyperdatatype* type,
-                                   std::vector<char>* scratch,
+                                   std::vector<char> *scratch,
                                    e::slice* value) const
 {
     struct treadstone_transformer* trans = NULL;
@@ -428,7 +433,7 @@ datatype_document :: extract_value(const char* path,
     }
 
     e::guard transg = e::makeguard(treadstone_transformer_destroy, trans);
-    unsigned char* v = NULL;
+    uint8_t* v = NULL;
     size_t v_sz = 0;
     e::guard g = e::makeguard(free_if_allocated, &v);
 
@@ -436,15 +441,21 @@ datatype_document :: extract_value(const char* path,
     {
         return false;
     }
-
-    return coerce_binary_to_primitive(e::slice(v, v_sz), type, scratch, value);
+    else
+    {
+        // TODO add a readonly extract_value so we don't have to copy it around
+        scratch->resize(v_sz);
+        memcpy(scratch->data(), v, v_sz);
+        *value = e::slice(scratch->data(), v_sz);
+        return true;
+    }
 }
 
 void
 datatype_document :: coerce_primitive_to_binary(hyperdatatype type,
                                                 const e::slice& in,
                                                 std::vector<char>* scratch,
-                                                e::slice* value) const
+                                                e::slice* value)
 {
     assert(is_document_primitive(type));
     unsigned char* v = NULL;
@@ -485,7 +496,7 @@ bool
 datatype_document :: coerce_binary_to_primitive(const e::slice& in,
                                                 hyperdatatype* type,
                                                 std::vector<char>* scratch,
-                                                e::slice* value) const
+                                                e::slice* value)
 {
     if (treadstone_binary_validate(in.data(), in.size()) < 0)
     {
@@ -522,3 +533,33 @@ datatype_document :: coerce_binary_to_primitive(const e::slice& in,
 
     return true;
 }
+
+bool
+datatype_document :: is_document_path(const e::slice& p)
+{
+    std::string path(p.cdata(), p.size());
+    return treadstone_validate_path(path.c_str()) == 0;
+}
+
+void
+datatype_document :: parse_document_path(const char* attr_path,
+                                const char** attr,
+                                const char** path,
+                                std::string* scratch)
+{
+    *attr = attr_path;
+    *path = NULL;
+
+    for (size_t i = 0; attr_path[i] != '\0'; ++i)
+    {
+        if (attr_path[i] == '[' ||
+            attr_path[i] == '.')
+        {
+            scratch->assign(attr_path, attr_path + i);
+            *attr = scratch->c_str();
+            *path = attr_path + i + 1;
+            break;
+        }
+    }
+}
+

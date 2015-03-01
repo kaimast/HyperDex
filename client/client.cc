@@ -45,7 +45,7 @@
 #include "common/attribute_check.h"
 #include "common/auth_wallet.h"
 #include "common/datatype_info.h"
-#include "common/documents.h"
+#include "common/datatype_document.h"
 #include "common/funcall.h"
 #include "common/macros.h"
 #include "common/network_msgtype.h"
@@ -739,7 +739,7 @@ client :: prepare_checks(const char* space, const schema& sc,
         std::string scratch;
         const char* attr;
         const char* path;
-        parse_document_path(chks[i].attr, &attr, &path, &scratch);
+        datatype_document::parse_document_path(chks[i].attr, &attr, &path, &scratch);
         uint16_t attrnum = sc.lookup_attr(attr);
 
         if (attrnum >= sc.attrs_sz)
@@ -820,7 +820,7 @@ client :: prepare_funcs(const char* space, const schema& sc,
         std::string scratch;
         const char* attr;
         const char* path;
-        parse_document_path(attrs[i].attr, &attr, &path, &scratch);
+        datatype_document::parse_document_path(attrs[i].attr, &attr, &path, &scratch);
         uint16_t attrnum = sc.lookup_attr(attr);
 
         if (attrnum == sc.attrs_sz)

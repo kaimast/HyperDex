@@ -59,27 +59,22 @@ class index_document : public index_info
                                              const region_id& ri) const;
 
     private:
-        enum type_t { STRING, NUMBER, DOCUMENT };
         bool parse_path(const index* idx,
                         const e::slice& document,
-                        type_t* t,
                         std::vector<char>* scratch,
                         e::slice* value) const;
         size_t index_entry_prefix_size(const region_id& ri, const index_id& ii) const;
         void index_entry(const region_id& ri,
                          const index_id& ii,
-                         type_t t,
                          std::vector<char>* scratch,
                          e::slice* slice) const;
         void index_entry(const region_id& ri,
                          const index_id& ii,
-                         type_t t,
                          const e::slice& value,
                          std::vector<char>* scratch,
                          e::slice* slice) const;
         void index_entry(const region_id& ri,
                          const index_id& ii,
-                         type_t t,
                          const index_encoding* key_ie,
                          const e::slice& key,
                          const e::slice& value,
@@ -90,8 +85,6 @@ class index_document : public index_info
                                         const region_id& ri,
                                         const range& r,
                                         const index_encoding* key_ie) const;
-
-        const index_encoding* lookup_encoding(type_t t) const;
 
     private:
         const datatype_document m_di;

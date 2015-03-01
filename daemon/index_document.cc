@@ -69,10 +69,8 @@ index_document :: index_changes(const index* idx,
                                 const e::slice* new_document,
                                 leveldb::WriteBatch* updates) const
 {
-    type_t t;
-    std::vector<char> scratch_value;
     e::slice value;
-    std::vector<char> scratch_entry;
+    std::vector<char> scratch_entry, scratch_oldvalue, scratch_newvalue;
     e::slice entry;
 
     if (old_document && new_document && *old_document == *new_document)
@@ -80,15 +78,15 @@ index_document :: index_changes(const index* idx,
         return;
     }
 
-    if (old_document && parse_path(idx, *old_document, &t, &scratch_value, &value))
+    if (old_document && parse_path(idx, *old_document, &scratch_oldvalue, &value))
     {
-        index_entry(ri, idx->id, t, key_ie, key, value, &scratch_entry, &entry);
+        index_entry(ri, idx->id, key_ie, key, value, &scratch_entry, &entry);
         updates->Delete(leveldb::Slice(reinterpret_cast<const char*>(entry.data()), entry.size()));
     }
 
-    if (new_document && parse_path(idx, *new_document, &t, &scratch_value, &value))
+    if (new_document && parse_path(idx, *new_document, &scratch_newvalue, &value))
     {
-        index_entry(ri, idx->id, t, key_ie, key, value, &scratch_entry, &entry);
+        index_entry(ri, idx->id, key_ie, key, value, &scratch_entry, &entry);
         updates->Put(leveldb::Slice(reinterpret_cast<const char*>(entry.data()), entry.size()), leveldb::Slice());
     }
 }
@@ -100,6 +98,7 @@ index_document :: iterator_from_check(leveldb_snapshot_ptr snap,
                                       const attribute_check& check,
                                       const index_encoding* key_ie) const
 {
+    // We expect the following format <path>\0<value>
     const char* path = reinterpret_cast<const char*>(check.value.data());
     size_t path_sz = strnlen(path, check.value.size());
 
@@ -116,18 +115,18 @@ index_document :: iterator_from_check(leveldb_snapshot_ptr snap,
         return NULL;
     }
 
-    char scratch_v[sizeof(int64_t) + sizeof(double)];
-    e::slice value(path + path_sz + 1, check.value.size() - path_sz - 1);
+    std::vector<char> scratch;
+    e::slice value_in(path + path_sz + 1, check.value.size() - path_sz - 1);
+    e::slice value;
 
-    if (check.datatype == HYPERDATATYPE_INT64)
+    if (check.datatype == HYPERDATATYPE_DOCUMENT)
     {
-        memset(scratch_v, 0, sizeof(int64_t));
-        memmove(scratch_v, value.data(), std::min(value.size(), sizeof(int64_t)));
-        int64_t val_i;
-        e::unpack64le(scratch_v, &val_i);
-        double val_d = val_i;
-        e::pack64le(val_d, scratch_v);
-        value = e::slice(scratch_v, sizeof(double));
+        // already binary
+        value = value_in;
+    }
+    else
+    {
+        hyperdex::datatype_document::coerce_primitive_to_binary(check.datatype, value_in, &scratch, &value);
     }
 
     size_t range_prefix_sz = index_entry_prefix_size(ri, ii);
@@ -140,28 +139,8 @@ index_document :: iterator_from_check(leveldb_snapshot_ptr snap,
     bool has_start;
     bool has_limit;
 
-    type_t t;
-
-    if(check.datatype == HYPERDATATYPE_STRING)
-    {
-        t = STRING;
-    }
-    else if(check.datatype == HYPERDATATYPE_DOCUMENT)
-    {
-        if(check.predicate != HYPERPREDICATE_EQUALS)
-        {
-            return NULL;
-        }
-
-        t = DOCUMENT;
-    }
-    else
-    {
-        t = NUMBER;
-    }
-
-    index_entry(ri, ii, t, value, &scratch_a, &a);
-    index_entry(ri, ii, t, &scratch_b, &b);
+    index_entry(ri, ii, value, &scratch_a, &a);
+    index_entry(ri, ii, &scratch_b, &b);
 
     switch (check.predicate)
     {
@@ -190,7 +169,7 @@ index_document :: iterator_from_check(leveldb_snapshot_ptr snap,
             return NULL;
     }
 
-    const index_encoding* ie = lookup_encoding(t);
+    const index_encoding* ie = index_encoding::lookup(HYPERDATATYPE_DOCUMENT);
 
     has_start = a.data() == start.data();
     has_limit = a.data() == limit.data();
@@ -200,53 +179,13 @@ index_document :: iterator_from_check(leveldb_snapshot_ptr snap,
                                                ie, key_ie);
 }
 
-const hyperdex::index_encoding*
-index_document :: lookup_encoding(type_t t) const
-{
-    switch (t)
-    {
-        case STRING:
-            return index_encoding::lookup(HYPERDATATYPE_STRING);
-        case NUMBER:
-            return index_encoding::lookup(HYPERDATATYPE_FLOAT);
-        case DOCUMENT:
-            return index_encoding::lookup(HYPERDATATYPE_DOCUMENT);
-        default:
-            abort();
-    }
-
-    return NULL;
-}
-
 bool
 index_document :: parse_path(const index* idx,
                              const e::slice& document,
-                             type_t* t,
-                             std::vector<char>* scratch,
+                             std::vector<char> *scratch,
                              e::slice* value) const
 {
-    hyperdatatype type;
-
-    if (m_di.extract_value(idx->extra.c_str(), document, &type, scratch, value))
-    {
-        if (type == HYPERDATATYPE_STRING)
-        {
-            *t = STRING;
-            return true;
-        }
-        else if (type == HYPERDATATYPE_INT64 || type == HYPERDATATYPE_FLOAT)
-        {
-            *t = NUMBER;
-            return true;
-        }
-        else if (type == HYPERDATATYPE_DOCUMENT)
-        {
-            *t = DOCUMENT;
-            return true;
-        }
-    }
-
-    return false;
+    return m_di.extract_binary_value(idx->extra.c_str(), document, scratch, value);
 }
 
 size_t
@@ -254,46 +193,26 @@ index_document :: index_entry_prefix_size(const region_id& ri, const index_id& i
 {
     return sizeof(uint8_t)
          + e::varint_length(ri.get())
-         + e::varint_length(ii.get())
-         + sizeof(uint8_t);
+         + e::varint_length(ii.get());
 }
 
 void
 index_document :: index_entry(const region_id& ri,
                               const index_id& ii,
-                              type_t t,
                               std::vector<char>* scratch,
                               e::slice* slice) const
 {
-    size_t sz = sizeof(uint8_t)
-              + e::varint_length(ri.get())
-              + e::varint_length(ii.get())
-              + sizeof(uint8_t);
+    size_t sz = index_entry_prefix_size(ri, ii);
 
     if (scratch->size() < sz)
     {
         scratch->resize(sz);
     }
 
-    uint8_t t8;
-    if(t == STRING)
-    {
-        t8 = 's';
-    }
-    else if(t == NUMBER)
-    {
-        t8 = 'i';
-    }
-    else
-    {
-        t8 = 'd';
-    }
-
     char* ptr = &scratch->front();
     ptr = e::pack8be('i', ptr);
     ptr = e::packvarint64(ri.get(), ptr);
     ptr = e::packvarint64(ii.get(), ptr);
-    ptr = e::pack8be(t8, ptr);
     assert(ptr == &scratch->front() + sz);
     *slice = e::slice(&scratch->front(), sz);
 }
@@ -301,44 +220,24 @@ index_document :: index_entry(const region_id& ri,
 void
 index_document :: index_entry(const region_id& ri,
                               const index_id& ii,
-                              type_t t,
                               const e::slice& value,
                               std::vector<char>* scratch,
                               e::slice* slice) const
 {
-    const index_encoding* val_ie = lookup_encoding(t);
+    const index_encoding* val_ie = index_encoding::lookup(HYPERDATATYPE_DOCUMENT);
 
     size_t val_sz = val_ie->encoded_size(value);
-    size_t sz = sizeof(uint8_t)
-              + e::varint_length(ri.get())
-              + e::varint_length(ii.get())
-              + sizeof(uint8_t)
-              + val_sz;
+    size_t sz = index_entry_prefix_size(ri, ii) + val_sz;
 
     if (scratch->size() < sz)
     {
         scratch->resize(sz);
     }
 
-    uint8_t t8;
-    if(t == STRING)
-    {
-        t8 = 's';
-    }
-    else if(t == NUMBER)
-    {
-        t8 = 'i';
-    }
-    else
-    {
-        t8 = 'd';
-    }
-
     char* ptr = &scratch->front();
     ptr = e::pack8be('i', ptr);
     ptr = e::packvarint64(ri.get(), ptr);
     ptr = e::packvarint64(ii.get(), ptr);
-    ptr = e::pack8be(t8, ptr);
     ptr = val_ie->encode(value, ptr);
     assert(ptr == &scratch->front() + sz);
     *slice = e::slice(&scratch->front(), sz);
@@ -406,14 +305,13 @@ index_document :: iterator_key(leveldb_snapshot_ptr snap,
 void
 index_document :: index_entry(const region_id& ri,
                               const index_id& ii,
-                              type_t t,
                               const index_encoding* key_ie,
                               const e::slice& key,
                               const e::slice& value,
                               std::vector<char>* scratch,
                               e::slice* slice) const
 {
-    const index_encoding* val_ie = lookup_encoding(t);
+    const index_encoding* val_ie = index_encoding::lookup(HYPERDATATYPE_DOCUMENT);
 
     size_t key_sz = key_ie->encoded_size(key);
     size_t val_sz = val_ie->encoded_size(value);
@@ -421,7 +319,6 @@ index_document :: index_entry(const region_id& ri,
     size_t sz = sizeof(uint8_t)
               + e::varint_length(ri.get())
               + e::varint_length(ii.get())
-              + sizeof(uint8_t)
               + val_sz
               + key_sz
               + (variable ? sizeof(uint32_t) : 0);
@@ -431,25 +328,10 @@ index_document :: index_entry(const region_id& ri,
         scratch->resize(sz);
     }
 
-    uint8_t t8;
-    if(t == STRING)
-    {
-        t8 = 's';
-    }
-    else if(t == NUMBER)
-    {
-        t8 = 'i';
-    }
-    else
-    {
-        t8 = 'd';
-    }
-
     char* ptr = &scratch->front();
     ptr = e::pack8be('i', ptr);
     ptr = e::packvarint64(ri.get(), ptr);
     ptr = e::packvarint64(ii.get(), ptr);
-    ptr = e::pack8be(t8, ptr);
     ptr = val_ie->encode(value, ptr);
     ptr = key_ie->encode(key, ptr);
 

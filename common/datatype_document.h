@@ -63,21 +63,27 @@ class datatype_document : public datatype_info
                                     const e::slice& value) const;
 
     public:
-        bool extract_value(const char* path,
+        bool extract_binary_value(const char* path,
                            const e::slice& data,
-                           hyperdatatype* type,
-                           std::vector<char>* scratch,
+                           std::vector<char> *scratch,
                            e::slice* value) const;
 
-    private:
-        void coerce_primitive_to_binary(hyperdatatype type,
+    public:
+        static void coerce_primitive_to_binary(hyperdatatype type,
                                         const e::slice& in,
                                         std::vector<char>* scratch,
-                                        e::slice* value) const;
-        bool coerce_binary_to_primitive(const e::slice& in,
+                                        e::slice* value);
+        static bool coerce_binary_to_primitive(const e::slice& in,
                                         hyperdatatype* type,
                                         std::vector<char>* scratch,
-                                        e::slice* value) const;
+                                        e::slice* value);
+
+        static bool is_document_path(const e::slice& p);
+
+        static void parse_document_path(const char* attr_path,
+                            const char** attr,
+                            const char** path,
+                            std::string* scratch);
 };
 
 END_HYPERDEX_NAMESPACE
